@@ -11,30 +11,64 @@ class Theme:
     base_ttk_theme: str
     font: tuple
     heading_font: tuple
-    card_padding: int
+
+    # Colors (used to style ttk + our Text widgets)
+    bg: str
+    fg: str
+    panel: str
+    card: str
+    border: str
+    accent: str
+    text_bg: str
+    text_fg: str
+    muted: str
 
 
-THEMES = [
+THEMES: list[Theme] = [
     Theme(
-        name="Windows Clean",
+        name="Light",
         base_ttk_theme="vista",
         font=("Segoe UI", 10),
         heading_font=("Segoe UI", 13, "bold"),
-        card_padding=12,
+        bg="#F5F6F8",
+        fg="#111111",
+        panel="#FFFFFF",
+        card="#FFFFFF",
+        border="#D6D9DE",
+        accent="#2B7FFF",
+        text_bg="#FFFFFF",
+        text_fg="#111111",
+        muted="#666666",
     ),
     Theme(
-        name="Minimal Dev",
-        base_ttk_theme="clam",
-        font=("Consolas", 10),
-        heading_font=("Consolas", 13, "bold"),
-        card_padding=10,
-    ),
-    Theme(
-        name="Neon Gamer",
+        name="Dark",
         base_ttk_theme="clam",
         font=("Segoe UI", 10),
         heading_font=("Segoe UI", 13, "bold"),
-        card_padding=12,
+        bg="#0F1115",
+        fg="#E8E8EA",
+        panel="#151922",
+        card="#111520",
+        border="#262C39",
+        accent="#7AA2FF",
+        text_bg="#0C0F16",
+        text_fg="#E8E8EA",
+        muted="#A0A6B3",
+    ),
+    Theme(
+        name="Neon",
+        base_ttk_theme="clam",
+        font=("Segoe UI", 10),
+        heading_font=("Segoe UI", 13, "bold"),
+        bg="#070A0F",
+        fg="#EAF6FF",
+        panel="#0D1220",
+        card="#0A1020",
+        border="#1B2B46",
+        accent="#00D1FF",
+        text_bg="#060A12",
+        text_fg="#EAF6FF",
+        muted="#96B2C5",
     ),
 ]
 
@@ -48,16 +82,24 @@ def apply_theme(root: tk.Tk, theme: Theme) -> None:
     else:
         style.theme_use("clam" if "clam" in available else available[0])
 
-    # A simple global font
     root.option_add("*Font", theme.font)
 
-    # Card styling
-    style.configure("Card.TFrame", relief="ridge", borderwidth=2 if theme.name == "Neon Gamer" else 1)
+    # Base styling (ttk only)
+    style.configure("App.TFrame", background=theme.bg)
+    style.configure("Panel.TFrame", background=theme.panel)
+    style.configure("Card.TFrame", background=theme.card, relief="solid", borderwidth=1)
+    style.configure("TLabel", background=theme.panel, foreground=theme.fg)
+    style.configure("Heading.TLabel", background=theme.panel, foreground=theme.fg)
+    style.configure("Muted.TLabel", background=theme.panel, foreground=theme.muted)
 
-    # Small vibe differences (ttk is limited, but this helps)
-    if theme.name == "Neon Gamer":
-        style.configure("TButton", padding=7)
-        style.configure("TLabel", padding=2)
-    else:
-        style.configure("TButton", padding=6)
-        style.configure("TLabel", padding=1)
+    style.configure("TButton", padding=7)
+    style.configure("Accent.TButton", padding=7)
+
+    # Some themes look nicer with flat buttons; ttk is limited but this helps.
+    style.map(
+        "Accent.TButton",
+        foreground=[("active", theme.fg)],
+    )
+
+    # Make root bg match theme
+    root.configure(background=theme.bg)
