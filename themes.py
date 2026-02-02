@@ -12,7 +12,6 @@ class Theme:
     font: tuple
     heading_font: tuple
 
-    # Colors (used to style ttk + our Text widgets)
     bg: str
     fg: str
     panel: str
@@ -70,38 +69,36 @@ THEMES: list[Theme] = [
         text_fg="#EAF6FF",
         muted="#96B2C5",
     ),
-
     Theme(
-    name="Pink",
-    base_ttk_theme="clam",
-    font=("Segoe UI", 10),
-    heading_font=("Segoe UI", 13, "bold"),
-    bg="#FFF1F6",
-    fg="#2B1B23",
-    panel="#FFFFFF",
-    card="#FFFFFF",
-    border="#F2B6CF",
-    accent="#FF4DA6",
-    text_bg="#FFFFFF",
-    text_fg="#2B1B23",
-    muted="#7B4B5F",
-),
-Theme(
-    name="Anime Night",
-    base_ttk_theme="clam",
-    font=("Segoe UI", 10),
-    heading_font=("Segoe UI", 13, "bold"),
-    bg="#070913",
-    fg="#F0F4FF",
-    panel="#0D1030",
-    card="#0A0F2B",
-    border="#2A3270",
-    accent="#A78BFA",  # purple glow vibe
-    text_bg="#06081A",
-    text_fg="#F0F4FF",
-    muted="#B8C0FF",
-),
-
+        name="Pink",
+        base_ttk_theme="clam",
+        font=("Segoe UI", 10),
+        heading_font=("Segoe UI", 13, "bold"),
+        bg="#FFF1F6",
+        fg="#2B1B23",
+        panel="#FFFFFF",
+        card="#FFFFFF",
+        border="#F2B6CF",
+        accent="#FF4DA6",
+        text_bg="#FFFFFF",
+        text_fg="#2B1B23",
+        muted="#7B4B5F",
+    ),
+    Theme(
+        name="Anime Night",
+        base_ttk_theme="clam",
+        font=("Segoe UI", 10),
+        heading_font=("Segoe UI", 13, "bold"),
+        bg="#070913",
+        fg="#F0F4FF",
+        panel="#0D1030",
+        card="#0A0F2B",
+        border="#2A3270",
+        accent="#A78BFA",
+        text_bg="#06081A",
+        text_fg="#F0F4FF",
+        muted="#B8C0FF",
+    ),
 ]
 
 
@@ -115,23 +112,15 @@ def apply_theme(root: tk.Tk, theme: Theme) -> None:
         style.theme_use("clam" if "clam" in available else available[0])
 
     root.option_add("*Font", theme.font)
+    root.configure(background=theme.bg)
 
-    # Base styling (ttk only)
     style.configure("App.TFrame", background=theme.bg)
     style.configure("Panel.TFrame", background=theme.panel)
     style.configure("Card.TFrame", background=theme.card, relief="solid", borderwidth=1)
+
     style.configure("TLabel", background=theme.panel, foreground=theme.fg)
     style.configure("Heading.TLabel", background=theme.panel, foreground=theme.fg)
     style.configure("Muted.TLabel", background=theme.panel, foreground=theme.muted)
 
     style.configure("TButton", padding=7)
     style.configure("Accent.TButton", padding=7)
-
-    # Some themes look nicer with flat buttons; ttk is limited but this helps.
-    style.map(
-        "Accent.TButton",
-        foreground=[("active", theme.fg)],
-    )
-
-    # Make root bg match theme
-    root.configure(background=theme.bg)

@@ -17,7 +17,7 @@ MB_ICONQUESTION = 0x00000020
 MB_ICONWARNING = 0x00000030
 MB_ICONINFORMATION = 0x00000040
 
-# Other
+# Other flags
 MB_TOPMOST = 0x00040000
 
 # Return codes
@@ -50,6 +50,6 @@ class MessageBoxConfig:
 
 
 def show_messagebox(cfg: MessageBoxConfig) -> int:
-    # Show a native Windows MessageBox and return the Win32 result code.
+    """Show a native Windows MessageBox and return the Win32 result code."""
     flags = cfg.buttons | cfg.icon | (MB_TOPMOST if cfg.topmost else 0)
     return ctypes.windll.user32.MessageBoxW(0, cfg.message, cfg.title, flags)

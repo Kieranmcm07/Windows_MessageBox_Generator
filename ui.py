@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import json
 import random
-from PIL import Image, ImageTk
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-from themes import Theme, THEMES, apply_theme
+from PIL import Image, ImageTk, ImageOps
+
+from themes import Theme, apply_theme
 from winbox import (
     MessageBoxConfig,
     show_messagebox,
@@ -25,6 +26,69 @@ from winbox import (
     MB_ICONINFORMATION,
     MB_ICONQUESTION,
 )
+
+class WallpaperPane(tk.Canvas):
+    """
+    A canvas that draws a wallpaper image stretched to its size and then hosts
+    a single child frame on top (so you get a real visible background).
+    """
+    def __init__(self, master: tk.Misc, **kwargs):
+        super().__init__(master, highlightthickness=0, bd=0, **kwargs)
+        self._photo = None
+        self._img_path: Path | None = None
+        self._overlay_rgba = (0, 0, 0, 0)  # default: no overlay
+        self._content_id = None
+        self._image_id = None
+
+        self._content = ttk.Frame(self)  # put your ttk widgets in here
+        self._content_id = self.create_window(0, 0, anchor="nw", window=self._content)
+
+        self.bind("<Configure>", lambda _e: self._redraw())
+
+    @property
+    def content(self) -> ttk.Frame:
+        return self._content
+
+    def set_wallpaper(self, path: Path | None, overlay_rgba=(0, 0, 0, 140)) -> None:
+        self._img_path = path
+        self._overlay_rgba = overlay_rgba
+        self._redraw()
+
+    def _redraw(self) -> None:
+        w = self.winfo_width()
+        h = self.winfo_height()
+        if w < 10 or h < 10:
+            return
+
+        # keep content frame always sized to canvas
+        self.itemconfigure(self._content_id, width=w, height=h)
+
+        if not self._img_path:
+            if self._image_id is not None:
+                self.delete(self._image_id)
+                self._image_id = None
+            return
+
+        try:
+            img = Image.open(self._img_path).convert("RGBA")
+            img = ImageOps.fit(img, (w, h), method=Image.Resampling.LANCZOS)
+
+            # overlay for readability
+            ov = Image.new("RGBA", (w, h), self._overlay_rgba)
+            img = Image.alpha_composite(img, ov)
+
+            self._photo = ImageTk.PhotoImage(img)
+
+            if self._image_id is None:
+                self._image_id = self.create_image(0, 0, anchor="nw", image=self._photo)
+                self.tag_lower(self._image_id)  # keep wallpaper behind content
+            else:
+                self.itemconfigure(self._image_id, image=self._photo)
+                self.tag_lower(self._image_id)
+        except Exception:
+            # if image fails, just ignore
+            return
+
 
 BUTTON_PRESETS = {
     "OK": MB_OK,
@@ -42,7 +106,6 @@ ICON_PRESETS = {
     "Question (?)": MB_ICONQUESTION,
 }
 
-# Handy presets for quick testing (feel free to add more)
 MESSAGE_PRESETS: dict[str, tuple[str, str, str, str]] = {
     "File already exists": (
         "File already exists",
@@ -77,7 +140,6 @@ class Assets:
 
 
 def _list_mascots(asset_dir: Path) -> list[Path]:
-    # Support mascot.png or mascot_*.png
     single = asset_dir / "mascot.png"
     if single.exists():
         return [single]
@@ -95,12 +157,30 @@ def load_assets(asset_dir: Path) -> Assets:
     mascots = _list_mascots(asset_dir)
     if not mascots:
         return Assets(mascot=None)
-
     picked = random.choice(mascots)
     return Assets(mascot=_load_photo(picked))
 
 
 class App(ttk.Frame):
+    def _bg_paths(self) -> list[Path]:
+        bg_dir = self.asset_dir / "backgrounds"
+        if not bg_dir.exists():
+            return []
+        choices = sorted(bg_dir.glob("anime_bg_*.png"))
+        if not choices:
+            choices = sorted(bg_dir.glob("*.png")) + sorted(bg_dir.glob("*.jpg")) + sorted(bg_dir.glob("*.jpeg"))
+        random.choices
+
+    def _make_wallpaper_photo(self, path: Path, size: tuple[int, int], overlay_alpha: int) -> ImageTk.PhotoImage | None:
+        try:
+            img = Image.open(path).convert("RGBA")
+            img = ImageOps.fit(img, size, method=Image.Resampling.LANCZOS)
+            overlay = Image.new("RGBA", size, (0, 0, 0, overlay_alpha))
+            img = Image.alpha_composite(img, overlay)
+            return ImageTk.PhotoImage(img)
+        except Exception:
+            return None
+
     def __init__(self, root: tk.Tk, themes: list[Theme], asset_dir: Path) -> None:
         super().__init__(root, style="App.TFrame")
         self.root = root
@@ -110,8 +190,15 @@ class App(ttk.Frame):
 
         self.assets = load_assets(asset_dir)
 
+        # --- Background system ---
+        self.bg_label: tk.Label | None = None
+        self.bg_photo = None
+        self._bg_after_id = None
+        self._bg_current_path: Path | None = None
+        self._bg_cache_size: tuple[int, int] | None = None
+
         # State
-        self.theme_var = tk.StringVar(value=self.themes[0].name)
+        self.theme_var = tk.StringVar(value=themes[0].name)
         self.preset_var = tk.StringVar(value="File already exists")
 
         self.title_var = tk.StringVar(value="File already exists")
@@ -120,7 +207,7 @@ class App(ttk.Frame):
         self.topmost_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="Ready.")
 
-        # Images must be referenced to avoid GC
+        # Images
         self.mascot_img = self.assets.mascot
         self.mascot_label: ttk.Label | None = None
 
@@ -133,59 +220,43 @@ class App(ttk.Frame):
         self._apply_preset()
         self._refresh_preview()
         self._place_mascot()
-    
-    def _set_background_for_theme(self):
-        bg_dir = self.asset_dir / "backgrounds"
-
-        if self.theme.name != "Anime Night":
-            self.bg_label.place_forget()
-            return
-
-        bg_file = random.choice(list(bg_dir.glob("anime_*.png")))
-        if not bg_file.exists():
-            return
-
-        img = Image.open(bg_file)
-
-        # Resize to window size
-        w = self.root.winfo_width()
-        h = self.root.winfo_height()
-        if w > 0 and h > 0:
-            img = img.resize((w, h))
-
-        # Dark overlay for readability
-        overlay = Image.new("RGBA", img.size, (0, 0, 0, 120))
-        img = img.convert("RGBA")
-        img = Image.alpha_composite(img, overlay)
-
-        self.bg_image = ImageTk.PhotoImage(img)
-        self.bg_label.configure(image=self.bg_image)
-        self.bg_label.lower()  # send to back
+        self._apply_background_for_theme()
 
     # ---------------- UI ----------------
 
     def _build(self) -> None:
-        self.root.bind("<Configure>", lambda e: self._set_background_for_theme())
         self.grid(sticky="nsew")
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
-        self.bg_label = tk.Label(self.root)
-        self.bg_label.place(x=0, y=0, relwidth=1, relheight=1)
-        self.bg_image = None
+
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
 
-        # Main split: left controls / right tabs
+        # Background label (behind everything)
+        self.bg_label = tk.Label(self.root, borderwidth=0, highlightthickness=0)
+        self.bg_label.place(x=0, y=0, relwidth=1, relheight=1)
+        self.bg_label.lower()
+
         paned = ttk.Panedwindow(self, orient="horizontal")
         paned.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
 
-        left = ttk.Frame(paned, style="Panel.TFrame", padding=12)
-        right = ttk.Frame(paned, style="Panel.TFrame", padding=12)
+        # Wallpaper panes (canvas with a ttk content frame on top)
+        self.left_wall = WallpaperPane(paned)
+        self.right_wall = WallpaperPane(paned)
 
-        paned.add(left, weight=2)
-        paned.add(right, weight=3)
+        paned.add(self.left_wall, weight=2)
+        paned.add(self.right_wall, weight=3)
 
-        # LEFT: header + preset + fields
+        # The actual ttk content frames you build UI into:
+        left = self.left_wall.content
+        right = self.right_wall.content
+
+        # padding inside the content frame
+        left.configure(style="Panel.TFrame", padding=12)
+        right.configure(style="Panel.TFrame", padding=12)
+
+
+        # LEFT
         left.columnconfigure(1, weight=1)
         left.rowconfigure(3, weight=1)
 
@@ -224,7 +295,6 @@ class App(ttk.Frame):
 
         row4 = ttk.Frame(left, style="Panel.TFrame")
         row4.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 0))
-        row4.columnconfigure(1, weight=1)
 
         ttk.Label(row4, text="Buttons:", style="Muted.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 6))
         ttk.Combobox(row4, textvariable=self.buttons_var, values=list(BUTTON_PRESETS), state="readonly", width=18).grid(
@@ -242,7 +312,6 @@ class App(ttk.Frame):
 
         actions = ttk.Frame(left, style="Panel.TFrame")
         actions.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        actions.columnconfigure(0, weight=1)
 
         btns = ttk.Frame(actions, style="Panel.TFrame")
         btns.grid(row=0, column=0, sticky="e")
@@ -255,7 +324,7 @@ class App(ttk.Frame):
         ttk.Button(row2, text="Import JSON", command=self._import_json).grid(row=0, column=1, padx=(0, 8))
         ttk.Button(row2, text="Random mascot", command=self._random_mascot).grid(row=0, column=2)
 
-        # RIGHT: notebook tabs
+        # RIGHT: tabs
         right.columnconfigure(0, weight=1)
         right.rowconfigure(0, weight=1)
 
@@ -266,7 +335,6 @@ class App(ttk.Frame):
         self.preview_tab = ttk.Frame(self.tabs, style="Panel.TFrame", padding=10)
         self.preview_tab.columnconfigure(0, weight=1)
         self.preview_tab.rowconfigure(1, weight=1)
-
         self.tabs.add(self.preview_tab, text="Preview")
 
         self.preview_heading = ttk.Label(self.preview_tab, text="Preview", style="Heading.TLabel")
@@ -304,19 +372,21 @@ class App(ttk.Frame):
         # About tab
         self.about_tab = ttk.Frame(self.tabs, style="Panel.TFrame", padding=10)
         self.tabs.add(self.about_tab, text="About")
-
         ttk.Label(self.about_tab, text="About", style="Heading.TLabel").grid(row=0, column=0, sticky="w")
+
         about_text = (
             "MessageBox Builder\n\n"
-            "• Builds native Windows MessageBox dialogs\n"
-            "• Saves/loads configs as JSON\n"
-            "• Tracks history of shown dialogs\n\n"
-            "Tip: put multiple mascots in assets/ named mascot_1.png, mascot_2.png, etc."
+            "• Native Windows MessageBox dialogs\n"
+            "• Theme system + Anime background\n"
+            "• JSON import/export\n"
+            "• History log\n\n"
+            "Tip: put anime backgrounds in assets/backgrounds/ as anime_bg_*.png"
         )
-        self.about_label = ttk.Label(self.about_tab, text=about_text, style="Muted.TLabel", justify="left")
-        self.about_label.grid(row=1, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(self.about_tab, text=about_text, style="Muted.TLabel", justify="left").grid(
+            row=1, column=0, sticky="w", pady=(10, 0)
+        )
 
-        # Status bar (outside paned, along bottom)
+        # Status bar
         self.status_bar = ttk.Label(self.root, textvariable=self.status_var, anchor="w", padding=(12, 6))
         self.status_bar.grid(row=1, column=0, sticky="ew")
 
@@ -330,7 +400,10 @@ class App(ttk.Frame):
         self.topmost_var.trace_add("write", lambda *_: self._refresh_preview())
         self.message_text.bind("<KeyRelease>", lambda _e: self._refresh_preview())
 
-    # -------------- Theme / preset --------------
+        # Background redraw on resize (debounced)
+        self.root.bind("<Configure>", lambda _e: self._schedule_bg_redraw())
+
+    # ---------------- Theme + background ----------------
 
     def _apply_selected_theme(self) -> None:
         self.theme = next((t for t in self.themes if t.name == self.theme_var.get()), self.themes[0])
@@ -342,6 +415,8 @@ class App(ttk.Frame):
         self._apply_text_theme(self.message_text)
         self._apply_text_theme(self.preview_body)
         self._apply_listbox_theme(self.history_list)
+
+        self._apply_background_for_theme()
 
     def _apply_text_theme(self, widget: tk.Text) -> None:
         widget.configure(
@@ -362,6 +437,44 @@ class App(ttk.Frame):
             selectbackground=self.theme.accent,
         )
 
+    def _schedule_bg_redraw(self) -> None:
+        if self._bg_after_id is not None:
+            self.root.after_cancel(self._bg_after_id)
+        self._bg_after_id = self.root.after(120, self._apply_background_for_theme)
+
+    def _pick_background(self) -> Path | None:
+        bg_dir = self.asset_dir / "backgrounds"
+        if not bg_dir.exists():
+            return None
+
+        choices = sorted(bg_dir.glob("anime_bg_*.png"))
+        if not choices:
+            choices = sorted(bg_dir.glob("*.png")) + sorted(bg_dir.glob("*.jpg")) + sorted(bg_dir.glob("*.jpeg"))
+        if not choices:
+            return None
+
+        return random.choice(choices)
+    
+    def _apply_background_for_theme(self) -> None:
+        # Only show wallpaper in Anime Night theme
+        if self.theme.name != "Anime Night":
+            # Remove wallpapers
+            if hasattr(self, "left_wall"):
+                self.left_wall.set_wallpaper(None)
+                self.right_wall.set_wallpaper(None)
+            return
+
+        bg_path = self._pick_background()
+        if not bg_path:
+            self.status_var.set("No backgrounds found in assets/backgrounds/")
+            return
+
+        # Stronger overlay on left (text heavy), lighter on right (preview vibe)
+        self.left_wall.set_wallpaper(bg_path, overlay_rgba=(0, 0, 0, 170))
+        self.right_wall.set_wallpaper(bg_path, overlay_rgba=(0, 0, 0, 120))
+
+    # ---------------- Presets ----------------
+
     def _apply_preset(self) -> None:
         key = self.preset_var.get()
         if key not in MESSAGE_PRESETS:
@@ -377,12 +490,11 @@ class App(ttk.Frame):
 
         self._refresh_preview()
 
-    # -------------- Mascot --------------
+    # ---------------- Mascot ----------------
 
     def _place_mascot(self) -> None:
         if not self.mascot_img:
             return
-
         self.mascot_label = ttk.Label(self.root, image=self.mascot_img)
         self.mascot_label.place(relx=1.0, rely=1.0, x=-12, y=-12, anchor="se")
 
@@ -406,7 +518,7 @@ class App(ttk.Frame):
 
         self.status_var.set(f"Mascot: {picked.name}")
 
-    # -------------- Core logic --------------
+    # ---------------- Core logic ----------------
 
     def _get_cfg(self) -> MessageBoxConfig:
         title = self.title_var.get().strip() or "Message"
@@ -446,6 +558,7 @@ class App(ttk.Frame):
 
     def _on_copy_snippet(self) -> None:
         cfg = self._get_cfg()
+
         flags_line = f"flags = {cfg.buttons} | {cfg.icon}"
         if cfg.topmost:
             flags_line += " | 0x00040000"
@@ -462,7 +575,7 @@ class App(ttk.Frame):
         self.root.clipboard_append(snippet)
         self.status_var.set("Copied snippet to clipboard.")
 
-    # -------------- History / JSON --------------
+    # ---------------- History / JSON ----------------
 
     def _add_history(self, line: str) -> None:
         self.history.append(line)
@@ -478,7 +591,6 @@ class App(ttk.Frame):
         if not sel:
             self.status_var.set("No history item selected.")
             return
-
         text = self.history_list.get(sel[0])
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
@@ -492,6 +604,8 @@ class App(ttk.Frame):
             "buttons": self.buttons_var.get(),
             "icon": self.icon_var.get(),
             "topmost": cfg.topmost,
+            "theme": self.theme.name,
+            "preset": self.preset_var.get(),
         }
 
         path = filedialog.asksaveasfilename(
@@ -520,6 +634,11 @@ class App(ttk.Frame):
             self.icon_var.set(data.get("icon", "Info (i)"))
             self.topmost_var.set(bool(data.get("topmost", False)))
 
+            # Theme (optional)
+            theme_name = data.get("theme")
+            if theme_name:
+                self.theme_var.set(theme_name)
+
             self.message_text.delete("1.0", "end")
             self.message_text.insert("1.0", data.get("message", "Hello!"))
 
@@ -527,4 +646,3 @@ class App(ttk.Frame):
             self.status_var.set("Imported config JSON.")
         except Exception as exc:
             messagebox.showerror("Import failed", f"Could not import JSON:\n{exc}")
-        self._set_background_for_theme()
