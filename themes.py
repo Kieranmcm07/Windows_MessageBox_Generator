@@ -70,6 +70,38 @@ THEMES: list[Theme] = [
         text_fg="#EAF6FF",
         muted="#96B2C5",
     ),
+
+    Theme(
+    name="Pink",
+    base_ttk_theme="clam",
+    font=("Segoe UI", 10),
+    heading_font=("Segoe UI", 13, "bold"),
+    bg="#FFF1F6",
+    fg="#2B1B23",
+    panel="#FFFFFF",
+    card="#FFFFFF",
+    border="#F2B6CF",
+    accent="#FF4DA6",
+    text_bg="#FFFFFF",
+    text_fg="#2B1B23",
+    muted="#7B4B5F",
+),
+Theme(
+    name="Anime Night",
+    base_ttk_theme="clam",
+    font=("Segoe UI", 10),
+    heading_font=("Segoe UI", 13, "bold"),
+    bg="#070913",
+    fg="#F0F4FF",
+    panel="#0D1030",
+    card="#0A0F2B",
+    border="#2A3270",
+    accent="#A78BFA",  # purple glow vibe
+    text_bg="#06081A",
+    text_fg="#F0F4FF",
+    muted="#B8C0FF",
+),
+
 ]
 
 

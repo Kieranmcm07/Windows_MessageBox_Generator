@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+from PIL import Image, ImageTk
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -132,14 +133,45 @@ class App(ttk.Frame):
         self._apply_preset()
         self._refresh_preview()
         self._place_mascot()
+    
+    def _set_background_for_theme(self):
+        bg_dir = self.asset_dir / "backgrounds"
+
+        if self.theme.name != "Anime Night":
+            self.bg_label.place_forget()
+            return
+
+        bg_file = random.choice(list(bg_dir.glob("anime_*.png")))
+        if not bg_file.exists():
+            return
+
+        img = Image.open(bg_file)
+
+        # Resize to window size
+        w = self.root.winfo_width()
+        h = self.root.winfo_height()
+        if w > 0 and h > 0:
+            img = img.resize((w, h))
+
+        # Dark overlay for readability
+        overlay = Image.new("RGBA", img.size, (0, 0, 0, 120))
+        img = img.convert("RGBA")
+        img = Image.alpha_composite(img, overlay)
+
+        self.bg_image = ImageTk.PhotoImage(img)
+        self.bg_label.configure(image=self.bg_image)
+        self.bg_label.lower()  # send to back
 
     # ---------------- UI ----------------
 
     def _build(self) -> None:
+        self.root.bind("<Configure>", lambda e: self._set_background_for_theme())
         self.grid(sticky="nsew")
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
-
+        self.bg_label = tk.Label(self.root)
+        self.bg_label.place(x=0, y=0, relwidth=1, relheight=1)
+        self.bg_image = None
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
 
@@ -495,3 +527,4 @@ class App(ttk.Frame):
             self.status_var.set("Imported config JSON.")
         except Exception as exc:
             messagebox.showerror("Import failed", f"Could not import JSON:\n{exc}")
+        self._set_background_for_theme()

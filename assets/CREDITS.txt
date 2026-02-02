@@ -1,4 +1,6 @@
-Mascot image source:
+Image sources:
 https://catbox.moe/pictures/qts/1490418851494.png
 https://catbox.moe/pictures/qts/1448242666775.png
+https://wallhaven.cc/w/0q2ye5
+https://wallhaven.cc/w/dg5m63
 Artist unknown (hosted on Catbox). Used for a demo GUI project.
