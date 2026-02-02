@@ -1,0 +1,3 @@
+Mascot image source:
+https://catbox.moe/pictures/qts/1490418851494.png
+Artist unknown (hosted on Catbox). Used for a demo GUI project.

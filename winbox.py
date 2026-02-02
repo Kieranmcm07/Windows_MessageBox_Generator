@@ -1,11 +1,7 @@
-# The normal native windows dialogue
-# winbox.py
 from __future__ import annotations
 
 import ctypes
 from dataclasses import dataclass
-
-from matplotlib.pyplot import box
 
 # Buttons
 MB_OK = 0x00000000
@@ -54,6 +50,6 @@ class MessageBoxConfig:
 
 
 def show_messagebox(cfg: MessageBoxConfig) -> int:
-    # Show a native Windows message box and return the Win32 result code.
+    # Show a native Windows MessageBox and return the Win32 result code.
     flags = cfg.buttons | cfg.icon | (MB_TOPMOST if cfg.topmost else 0)
     return ctypes.windll.user32.MessageBoxW(0, cfg.message, cfg.title, flags)
