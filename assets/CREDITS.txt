@@ -6,4 +6,5 @@ https://wallhaven.cc/w/dg5m63
 https://catbox.moe/pictures/qts/1453766877670.png
 https://catbox.moe/pictures/qts/1428707759205.png
 https://catbox.moe/pictures/qts/4babdfe8cc20226b619089b55e613eacdcadf77b.png
+https://catbox.moe/pictures/qts/1444797896875.png
 Artist unknown (hosted on Catbox). Used for a demo GUI project.
