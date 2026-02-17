@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+from tkinter.scrolledtext import ScrolledText
 
 from PIL import Image, ImageTk, ImageOps
 
@@ -71,6 +72,107 @@ MESSAGE_PRESETS: dict[str, tuple[str, str, str, str]] = {
 }
 
 
+# ---------------- Batch (.bat) generator ----------------
+
+_DOTNET_BUTTONS = {
+    MB_OK: "OK",
+    MB_OKCANCEL: "OKCancel",
+    MB_YESNO: "YesNo",
+    MB_YESNOCANCEL: "YesNoCancel",
+    MB_RETRYCANCEL: "RetryCancel",
+    MB_ABORTRETRYIGNORE: "AbortRetryIgnore",
+}
+
+_DOTNET_ICONS = {
+    0: "None",
+    MB_ICONERROR: "Error",
+    MB_ICONWARNING: "Warning",
+    MB_ICONINFORMATION: "Information",
+    MB_ICONQUESTION: "Question",
+}
+
+
+def _escape_for_batch_echo(line: str) -> str:
+    """Escape a single line so it is safe in a batch `echo` inside a parenthesized block."""
+    # We intentionally do NOT escape % here because user content containing % would expand at runtime.
+    # If you need a literal % in the final message, use %% in batch.
+    line = line.replace("^", "^^")
+    line = line.replace("&", "^&")
+    line = line.replace("<", "^<")
+    line = line.replace(">", "^>")
+    line = line.replace("|", "^|")
+    return line
+
+
+def build_bat_script(cfg: "MessageBoxConfig") -> str:
+    """Return a self-contained .bat script that shows an equivalent MessageBox.
+
+    Uses PowerShell + System.Windows.Forms for parity with Win32 MessageBox flags.
+    Writes a temporary .ps1 to preserve newlines and avoid quoting issues.
+    """
+    buttons = _DOTNET_BUTTONS.get(cfg.buttons, "OK")
+    icon = _DOTNET_ICONS.get(cfg.icon, "None")
+    topmost = "$true" if cfg.topmost else "$false"
+
+    title_lines = cfg.title.splitlines() or [""]
+    msg_lines = cfg.message.splitlines() or [""]
+
+    ps_lines: list[str] = []
+    ps_lines.append("Add-Type -AssemblyName System.Windows.Forms")
+    ps_lines.append("$title = @'")
+    ps_lines.extend(title_lines)
+    ps_lines.append("'@")
+    ps_lines.append("$message = @'")
+    ps_lines.extend(msg_lines)
+    ps_lines.append("'@")
+    ps_lines.append(f"$buttons = [System.Windows.Forms.MessageBoxButtons]::{buttons}")
+    ps_lines.append(f"$icon = [System.Windows.Forms.MessageBoxIcon]::{icon}")
+    ps_lines.append("# Create a hidden owner window so we can use TopMost when requested")
+    ps_lines.append("$owner = New-Object System.Windows.Forms.Form")
+    ps_lines.append("$owner.ShowInTaskbar = $false")
+    ps_lines.append("$owner.Opacity = 0")
+    ps_lines.append("$owner.StartPosition = 'Manual'")
+    ps_lines.append("$owner.Location = New-Object System.Drawing.Point(-32000,-32000)")
+    ps_lines.append(f"$owner.TopMost = {topmost}")
+    ps_lines.append("$owner.Add_Shown({ $owner.Hide() })")
+    ps_lines.append("$null = $owner.Show()  # ensures handle exists")
+    ps_lines.append("$result = [System.Windows.Forms.MessageBox]::Show($owner, $message, $title, $buttons, $icon)")
+    ps_lines.append("$owner.Close()")
+    ps_lines.append(
+        "switch ($result.ToString()) {"\
+        " 'OK' { exit 1 }"\
+        " 'Cancel' { exit 2 }"\
+        " 'Abort' { exit 3 }"\
+        " 'Retry' { exit 4 }"\
+        " 'Ignore' { exit 5 }"\
+        " 'Yes' { exit 6 }"\
+        " 'No' { exit 7 }"\
+        " default { exit 0 }"\
+        "}"
+    )
+
+    bat: list[str] = []
+    bat.append("@echo off")
+    bat.append("setlocal EnableExtensions")
+    bat.append("set \"ps1=%temp%\\msgbox_builder_%random%_%random%.ps1\"")
+    bat.append("(")
+    for line in ps_lines:
+        if line == "":
+            bat.append("  echo(")
+        else:
+            bat.append(f"  echo {_escape_for_batch_echo(line)}")
+    bat.append(") > \"%ps1%\"")
+    bat.append("powershell -NoProfile -ExecutionPolicy Bypass -File \"%ps1%\"")
+    bat.append("set \"rc=%errorlevel%\"")
+    bat.append("del /q \"%ps1%\" >nul 2>&1")
+    bat.append("echo.")
+    bat.append("echo Exit code: %rc%")
+    bat.append("pause")
+    bat.append("exit /b %rc%")
+
+    return "\n".join(bat) + "\n"
+
+
 @dataclass
 class Assets:
     mascot: tk.PhotoImage | None
@@ -111,8 +213,8 @@ class App(ttk.Frame):
         # Wallpaper system state
         self._bg_after_id = None
         self._wall_choice: Path | None = None
-        self._left_wall_photo = None
-        self._right_wall_photo = None
+        self._root_wall_photo = None
+
 
         # State
         self.theme_var = tk.StringVar(value=themes[0].name)
@@ -135,6 +237,7 @@ class App(ttk.Frame):
         self._apply_selected_theme()
         self._apply_preset()
         self._refresh_preview()
+        self._refresh_batch()
         self._place_mascot()
         self._apply_wallpaper_for_theme()
 
@@ -190,12 +293,10 @@ class App(ttk.Frame):
     def _apply_wallpaper_for_theme(self) -> None:
         # Only show wallpaper in Anime Night theme
         if self.theme.name != "Anime Night":
-            if hasattr(self, "left_wall_label"):
-                self.left_wall_label.configure(image="")
-                self.right_wall_label.configure(image="")
-                self._left_wall_photo = None
-                self._right_wall_photo = None
-                self._wall_choice = None
+            if hasattr(self, "root_wall_label"):
+                self.root_wall_label.configure(image="")
+                self._root_wall_photo = None
+            self._wall_choice = None
             return
 
         choices = self._bg_paths()
@@ -203,32 +304,25 @@ class App(ttk.Frame):
             self.status_var.set("No backgrounds found in assets/backgrounds/")
             return
 
-        # Keep stable until theme change
+        # Keep stable until user changes wallpaper
         if self._wall_choice not in choices:
             self._wall_choice = random.choice(choices)
         bg_path = self._wall_choice
 
-        lw = self._left_container.winfo_width()
-        lh = self._left_container.winfo_height()
-        rw = self._right_container.winfo_width()
-        rh = self._right_container.winfo_height()
-
-        if lw < 80 or lh < 80 or rw < 80 or rh < 80:
+        # Full window wallpaper (covers entire window)
+        w = self.root.winfo_width()
+        h = self.root.winfo_height()
+        if w < 200 or h < 200:
             self.root.after(120, self._apply_wallpaper_for_theme)
             return
 
-        left_photo = self._make_wallpaper_photo(bg_path, (lw, lh), overlay_alpha=170)
-        right_photo = self._make_wallpaper_photo(bg_path, (rw, rh), overlay_alpha=120)
-
-        if left_photo:
-            self._left_wall_photo = left_photo
-            self.left_wall_label.configure(image=self._left_wall_photo)
-
-        if right_photo:
-            self._right_wall_photo = right_photo
-            self.right_wall_label.configure(image=self._right_wall_photo)
+        photo = self._make_wallpaper_photo(bg_path, (w, h), overlay_alpha=0)
+        if photo:
+            self._root_wall_photo = photo
+            self.root_wall_label.configure(image=self._root_wall_photo)
 
         self.status_var.set(f"Wallpaper: {bg_path.name}")
+
 
     # ---------------- UI build ----------------
 
@@ -239,29 +333,37 @@ class App(ttk.Frame):
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
+        self.root_wall_label = tk.Label(self.root, bd=0)
+        self.root_wall_label.place(x=0, y=0, relwidth=1, relheight=1)
+        self.root_wall_label.lower()
+        self.lift()
 
         paned = ttk.Panedwindow(self, orient="horizontal")
         paned.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
-
+        for seq in ("<ButtonPress-1>", "<B1-Motion>", "<ButtonRelease-1>"):
+            paned.bind(seq, lambda e: "break")
         # ---- LEFT container (wallpaper + inset panel) ----
         left_container = tk.Frame(paned, bd=0, highlightthickness=0)
         paned.add(left_container, weight=2)
 
-        self.left_wall_label = tk.Label(left_container, bd=0)
-        self.left_wall_label.place(x=0, y=0, relwidth=1, relheight=1)
-
         left_inset = ttk.Frame(left_container, style="Panel.TFrame", padding=12)
-        left_inset.place(x=18, y=18, relwidth=1, relheight=1, width=-36, height=-36)
+        left_inset.place(x=40, y=40, relwidth=1, relheight=1, width=-80, height=-80)
 
         # ---- RIGHT container (wallpaper + inset panel) ----
         right_container = tk.Frame(paned, bd=0, highlightthickness=0)
         paned.add(right_container, weight=3)
 
-        self.right_wall_label = tk.Label(right_container, bd=0)
-        self.right_wall_label.place(x=0, y=0, relwidth=1, relheight=1)
+        # Prevent panes collapsing so widgets don't overlap when the window is resized.
+        try:
+            paned.paneconfigure(left_container, minsize=380)
+            paned.paneconfigure(right_container, minsize=460)
+        except Exception:
+            # Older Tk builds may not support minsize on panes.
+            pass
+
 
         right_inset = ttk.Frame(right_container, style="Panel.TFrame", padding=12)
-        right_inset.place(x=18, y=18, relwidth=1, relheight=1, width=-36, height=-36)
+        right_inset.place(x=40, y=40, relwidth=1, relheight=1, width=-80, height=-80)
 
         # Build the UI into inset frames
         left = left_inset
@@ -304,21 +406,30 @@ class App(ttk.Frame):
         ttk.Entry(left, textvariable=self.title_var).grid(row=2, column=1, sticky="ew", pady=(0, 6))
 
         ttk.Label(left, text="Message:", style="Muted.TLabel").grid(row=3, column=0, sticky="nw", pady=(0, 6))
-        self.message_text = tk.Text(left, height=9, wrap="word", highlightthickness=1)
+        self.message_text = ScrolledText(left, height=9, wrap="word", highlightthickness=1)
         self.message_text.grid(row=3, column=1, sticky="nsew", pady=(0, 6))
 
+        # Use a 2-row layout so it never squashes into the right pane.
         row4 = ttk.Frame(left, style="Panel.TFrame")
         row4.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        row4.columnconfigure(1, weight=1)
+        row4.columnconfigure(3, weight=1)
 
-        ttk.Label(row4, text="Buttons:", style="Muted.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 6))
-        ttk.Combobox(row4, textvariable=self.buttons_var, values=list(BUTTON_PRESETS), state="readonly", width=18).grid(
-            row=0, column=1, sticky="w"
-        )
+        ttk.Label(row4, text="Buttons:", style="Muted.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 6), pady=(0, 6))
+        ttk.Combobox(
+            row4,
+            textvariable=self.buttons_var,
+            values=list(BUTTON_PRESETS),
+            state="readonly",
+        ).grid(row=0, column=1, sticky="ew", pady=(0, 6))
 
-        ttk.Label(row4, text="Icon:", style="Muted.TLabel").grid(row=0, column=2, sticky="w", padx=(16, 6))
-        ttk.Combobox(row4, textvariable=self.icon_var, values=list(ICON_PRESETS), state="readonly", width=14).grid(
-            row=0, column=3, sticky="w"
-        )
+        ttk.Label(row4, text="Icon:", style="Muted.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 6))
+        ttk.Combobox(
+            row4,
+            textvariable=self.icon_var,
+            values=list(ICON_PRESETS),
+            state="readonly",
+        ).grid(row=1, column=1, sticky="ew")
 
         ttk.Checkbutton(left, text="Keep dialog on top", variable=self.topmost_var).grid(
             row=5, column=1, sticky="w", pady=(6, 10)
@@ -326,18 +437,23 @@ class App(ttk.Frame):
 
         actions = ttk.Frame(left, style="Panel.TFrame")
         actions.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        actions.columnconfigure(0, weight=1)
 
-        btns = ttk.Frame(actions, style="Panel.TFrame")
-        btns.grid(row=0, column=0, sticky="e")
-        ttk.Button(btns, text="Show", style="Accent.TButton", command=self._on_show).grid(row=0, column=0, padx=(0, 8))
-        ttk.Button(btns, text="Copy snippet", command=self._on_copy_snippet).grid(row=0, column=1)
+        # Make buttons wrap instead of overlapping when the window is narrow.
+        row_a = ttk.Frame(actions, style="Panel.TFrame")
+        row_a.grid(row=0, column=0, sticky="ew")
+        row_a.columnconfigure((0, 1, 2), weight=1)
+        ttk.Button(row_a, text="Show", style="Accent.TButton", command=self._on_show).grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        ttk.Button(row_a, text="Copy Python", command=self._on_copy_snippet).grid(row=0, column=1, sticky="ew", padx=(0, 8))
+        ttk.Button(row_a, text="Copy .bat", command=self._on_copy_bat).grid(row=0, column=2, sticky="ew")
 
-        row2 = ttk.Frame(actions, style="Panel.TFrame")
-        row2.grid(row=1, column=0, sticky="e", pady=(8, 0))
-        ttk.Button(row2, text="Export JSON", command=self._export_json).grid(row=0, column=0, padx=(0, 8))
-        ttk.Button(row2, text="Import JSON", command=self._import_json).grid(row=0, column=1, padx=(0, 8))
-        ttk.Button(row2, text="Random mascot", command=self._random_mascot).grid(row=0, column=2, padx=(0, 8))
-        ttk.Button(row2, text="New wallpaper", command=self._next_wallpaper).grid(row=0, column=3)
+        row_b = ttk.Frame(actions, style="Panel.TFrame")
+        row_b.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        row_b.columnconfigure((0, 1, 2, 3), weight=1)
+        ttk.Button(row_b, text="Export JSON", command=self._export_json).grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        ttk.Button(row_b, text="Import JSON", command=self._import_json).grid(row=0, column=1, sticky="ew", padx=(0, 8))
+        ttk.Button(row_b, text="Save .bat", command=self._save_bat).grid(row=0, column=2, sticky="ew", padx=(0, 8))
+        ttk.Button(row_b, text="New wallpaper", command=self._next_wallpaper).grid(row=0, column=3, sticky="ew")
 
 
         # RIGHT tabs
@@ -358,7 +474,9 @@ class App(ttk.Frame):
 
         self.card = ttk.Frame(self.preview_tab, style="Card.TFrame", padding=12)
         self.card.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+        # Two columns: text on the left, mascot on the right (no overlap).
         self.card.columnconfigure(0, weight=1)
+        self.card.columnconfigure(1, weight=0)
         self.card.rowconfigure(1, weight=1)
 
         self.preview_title = ttk.Label(self.card, text="")
@@ -369,6 +487,10 @@ class App(ttk.Frame):
 
         self.preview_meta = ttk.Label(self.card, text="", style="Muted.TLabel")
         self.preview_meta.grid(row=2, column=0, sticky="w", pady=(8, 0))
+
+        # Mascot lives inside the preview card so it never blocks text or buttons.
+        self.mascot_slot = ttk.Frame(self.card, style="Card.TFrame")
+        self.mascot_slot.grid(row=0, column=1, rowspan=3, sticky="se", padx=(14, 0))
 
         # History tab
         self.history_tab = ttk.Frame(self.tabs, style="Panel.TFrame", padding=10)
@@ -396,9 +518,27 @@ class App(ttk.Frame):
             justify="left",
         ).grid(row=1, column=0, sticky="w", pady=(10, 0))
 
-        # Status bar
+        # Batch tab
+        self.batch_tab = ttk.Frame(self.tabs, style="Panel.TFrame", padding=10)
+        self.batch_tab.columnconfigure(0, weight=1)
+        self.batch_tab.rowconfigure(1, weight=1)
+        self.tabs.add(self.batch_tab, text="Batch (.bat)")
+
+        ttk.Label(self.batch_tab, text="Batch (.bat)", style="Heading.TLabel").grid(row=0, column=0, sticky="w")
+        self.batch_text = ScrolledText(self.batch_tab, wrap="none", height=10, highlightthickness=1)
+        self.batch_text.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+        self.batch_text.configure(state="disabled")
+
+        b_btns = ttk.Frame(self.batch_tab, style="Panel.TFrame")
+        b_btns.grid(row=2, column=0, sticky="e", pady=(10, 0))
+        ttk.Button(b_btns, text="Copy .bat", command=self._on_copy_bat).grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(b_btns, text="Save .bat", command=self._save_bat).grid(row=0, column=1)
+
+        # Status bar (on root, below the main frame)
         self.status_bar = ttk.Label(self.root, textvariable=self.status_var, anchor="w", padding=(12, 6))
         self.status_bar.grid(row=1, column=0, sticky="ew")
+        self.status_bar.lift()
+
 
     def _wire(self) -> None:
         self.theme_var.trace_add("write", lambda *_: self._apply_selected_theme())
@@ -408,7 +548,11 @@ class App(ttk.Frame):
         self.buttons_var.trace_add("write", lambda *_: self._refresh_preview())
         self.icon_var.trace_add("write", lambda *_: self._refresh_preview())
         self.topmost_var.trace_add("write", lambda *_: self._refresh_preview())
-        self.message_text.bind("<KeyRelease>", lambda _e: self._refresh_preview())
+        self.title_var.trace_add("write", lambda *_: self._refresh_batch())
+        self.buttons_var.trace_add("write", lambda *_: self._refresh_batch())
+        self.icon_var.trace_add("write", lambda *_: self._refresh_batch())
+        self.topmost_var.trace_add("write", lambda *_: self._refresh_batch())
+        self.message_text.bind("<KeyRelease>", lambda _e: (self._refresh_preview(), self._refresh_batch()))
 
         self.root.bind("<Configure>", lambda _e: self._schedule_bg_redraw())
 
@@ -421,8 +565,10 @@ class App(ttk.Frame):
         self.heading_label.configure(font=self.theme.heading_font)
         self.preview_heading.configure(font=self.theme.heading_font)
 
+        # ScrolledText is a Text subclass
         self._apply_text_theme(self.message_text)
         self._apply_text_theme(self.preview_body)
+        self._apply_text_theme(self.batch_text)
         self._apply_listbox_theme(self.history_list)
 
         # wallpaper is separate
@@ -469,8 +615,11 @@ class App(ttk.Frame):
     def _place_mascot(self) -> None:
         if not self.mascot_img:
             return
-        self.mascot_label = ttk.Label(self.root, image=self.mascot_img)
-        self.mascot_label.place(relx=1.0, rely=1.0, x=-12, y=-12, anchor="se")
+
+        # Put the mascot in the preview card sidebar so it never covers text.
+        parent = getattr(self, "mascot_slot", self)
+        self.mascot_label = ttk.Label(parent, image=self.mascot_img)
+        self.mascot_label.grid(row=0, column=0, sticky="se")
 
     def _random_mascot(self) -> None:
         mascots = _list_mascots(self.asset_dir)
@@ -514,6 +663,14 @@ class App(ttk.Frame):
             text=f"{self.buttons_var.get()} • {self.icon_var.get()} • {'Topmost' if cfg.topmost else 'Normal'}"
         )
 
+    def _refresh_batch(self) -> None:
+        cfg = self._get_cfg()
+        script = build_bat_script(cfg)
+        self.batch_text.configure(state="normal")
+        self.batch_text.delete("1.0", "end")
+        self.batch_text.insert("1.0", script)
+        self.batch_text.configure(state="disabled")
+
     def _on_show(self) -> None:
         cfg = self._get_cfg()
         self.status_var.set("Showing message box...")
@@ -547,6 +704,26 @@ class App(ttk.Frame):
         self.root.clipboard_clear()
         self.root.clipboard_append(snippet)
         self.status_var.set("Copied snippet to clipboard.")
+
+    def _on_copy_bat(self) -> None:
+        cfg = self._get_cfg()
+        script = build_bat_script(cfg)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(script)
+        self.status_var.set("Copied .bat script to clipboard.")
+
+    def _save_bat(self) -> None:
+        cfg = self._get_cfg()
+        script = build_bat_script(cfg)
+        path = filedialog.asksaveasfilename(
+            title="Save .bat",
+            defaultextension=".bat",
+            filetypes=[("Batch files", "*.bat")],
+        )
+        if not path:
+            return
+        Path(path).write_text(script, encoding="utf-8")
+        self.status_var.set("Saved .bat script.")
 
     # ---------------- History / JSON ----------------
 

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import tkinter as tk
 from tkinter import ttk
 
+from matplotlib import style
+
 
 @dataclass(frozen=True)
 class Theme:
@@ -91,11 +93,11 @@ THEMES: list[Theme] = [
         heading_font=("Segoe UI", 13, "bold"),
         bg="#070913",
         fg="#F0F4FF",
-        panel="#0D1030",
-        card="#0A0F2B",
-        border="#2A3270",
+        panel="#0B0F1C",
+        card="#0E1528",
+        border="#30384F",
         accent="#A78BFA",
-        text_bg="#06081A",
+        text_bg="#0E1322",
         text_fg="#F0F4FF",
         muted="#B8C0FF",
     ),
@@ -124,3 +126,5 @@ def apply_theme(root: tk.Tk, theme: Theme) -> None:
 
     style.configure("TButton", padding=7)
     style.configure("Accent.TButton", padding=7)
+    style.configure("TPanedwindow", background=theme.bg)
+    style.configure("TNotebook", background=theme.bg)
