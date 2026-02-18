@@ -93,15 +93,21 @@ _DOTNET_ICONS = {
 
 
 def _escape_for_batch_echo(line: str) -> str:
-    """Escape a single line so it is safe in a batch `echo` inside a parenthesized block."""
-    # We intentionally do NOT escape % here because user content containing % would expand at runtime.
-    # If you need a literal % in the final message, use %% in batch.
+    # Escape caret first
     line = line.replace("^", "^^")
+
+    # Escape parentheses (THIS was breaking your batch block)
+    line = line.replace("(", "^(")
+    line = line.replace(")", "^)")
+
+    # Escape other special CMD characters
     line = line.replace("&", "^&")
     line = line.replace("<", "^<")
     line = line.replace(">", "^>")
     line = line.replace("|", "^|")
+
     return line
+
 
 
 def build_bat_script(cfg: "MessageBoxConfig") -> str:
