@@ -100,4 +100,4 @@ Anime Night loads wallpapers from:
 
 ## 🧑‍💻 Author
 
-Built by **Nokky07**
+Built by **Kieran**
