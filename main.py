@@ -8,7 +8,7 @@ from themes import THEMES
 
 
 def terminal() -> None:
-    print("MessageBox Builder has exited. You can view any print statements here.")
+    print("Process has been killed. You can safely ignore any error messages above this line.")
 
 
 
